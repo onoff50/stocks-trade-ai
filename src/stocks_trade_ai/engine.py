@@ -38,6 +38,7 @@ class Engine:
         self, *, settings: Settings, broker: Broker, market_data: MarketData,
         state: StateStore, parent: ParentOrder,
         adv_20day: float, volume_profile: dict[Any, float],
+        allow_no_adv_cap: bool = False,
     ) -> None:
         self._settings = settings
         self._broker = broker
@@ -46,6 +47,7 @@ class Engine:
         self._parent = parent
         self._adv_20day = adv_20day
         self._profile = volume_profile
+        self._allow_no_adv_cap = allow_no_adv_cap
         self._plan: SlicePlan | None = None
         self._slippage: SlippageMonitor | None = None
         self._kill_event = asyncio.Event()
@@ -81,6 +83,12 @@ class Engine:
             await self._on_exit()
 
     def _pre_trade(self) -> PreTradeDecision:
+        if self._adv_20day <= 0 and self._allow_no_adv_cap:
+            log.warning(
+                "ADV cap disabled: 20-day ADV unavailable and allow_no_adv_cap=True. "
+                "Volume profile falls back to uniform.",
+            )
+            return PreTradeDecision(state=RiskState.OK)
         return check_adv_cap(
             self._parent.total_qty, self._adv_20day, self._settings.adv_cap_pct,
         )

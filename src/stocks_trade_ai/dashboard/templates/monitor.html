@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StockTrade · {{ symbol }}</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #0d1117; color: #e6edf3; margin: 0; padding: 20px;
+         font-size: 13px; line-height: 1.5; }
+  h1 { font-size: 14px; margin: 0 0 16px; color: #58a6ff; display: flex;
+       align-items: center; gap: 10px; flex-wrap: wrap; font-weight: 600; }
+  .brand { display: inline-flex; align-items: center; gap: 8px; }
+  .brand-mark { width: 26px; height: 20px; color: #58a6ff; }
+  .brand-name { font-size: 15px; font-weight: 700; letter-spacing: 0.3px;
+                color: #e6edf3; }
+  h2 { font-size: 12px; color: #7d8590; margin: 20px 0 8px;
+       text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .card { background: #161b22; border: 1px solid #30363d; padding: 12px 16px;
+          border-radius: 6px; min-width: 130px; }
+  /* Top layout: 4 equal columns spanning the full page width.
+     Col 1 = sell form, col 2 = bid/ask + mid/spread/last cards,
+     col 3 = bid/ask depth ladder, col 4 = empty (reserved). */
+  .top-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+              align-items: start; margin-bottom: 16px; }
+  .form-card { grid-column: 1 / span 1; }
+  .market-cards { grid-column: 2 / span 1;
+                  display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .market-ladder { grid-column: 3 / span 1; min-width: 0; }
+  .market-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .market-row.three { grid-template-columns: 1fr 1fr 1fr; }
+  .market-row .card { min-width: 0; }
+  /* Card labels (Bid / Ask / Mid / Spread (bps) / Last trade) are short
+     enough to never need wrapping — keep them on one line even when the
+     half-width column gets tight. */
+  .market-row .card .muted { white-space: nowrap; }
+  /* Secondary metrics (Mid / Spread / Last) are supporting context, not
+     the primary number — render their values at body size, not hero size. */
+  #card-mid .big, #card-spread .big, #card-last .big { font-size: 14px; }
+  .form-title { font-size: 12px; color: #7d8590; text-transform: uppercase;
+                letter-spacing: 0.5px; font-weight: 600; margin: 0 0 12px; }
+  .form-title .normal { text-transform: none; letter-spacing: 0;
+                        font-weight: 400; color: #7d8590; }
+  @media (max-width: 900px) {
+    .top-grid { grid-template-columns: 1fr; width: 100%; }
+    .form-card, .market-cards, .market-ladder { grid-column: auto; }
+  }
+  .big { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .muted { color: #7d8590; font-size: 11px; }
+  .sub { color: #7d8590; font-size: 11px; margin-top: 4px; min-height: 14px; }
+  .bid-color { color: #2ea043; }
+  .ask-color { color: #f85149; }
+  .stale .big { opacity: 0.5; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px;
+          background: #21262d; font-size: 11px; font-weight: 500; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { padding: 4px 10px; border-bottom: 1px solid #21262d;
+           text-align: right; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; color: #7d8590; }
+  .ladder { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .ladder-card { background: #161b22; border: 1px solid #30363d; padding: 12px;
+                 border-radius: 6px; }
+  .ladder-title { font-size: 12px; color: #7d8590; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  /* Order book panel — single bordered card with summary header, two-column ladder,
+     and a compact footer for mid / spread / last. Inspired by Robinhood Level 2. */
+  .orderbook { background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+  .orderbook.stale { opacity: 0.55; }
+  .ob-header { display: flex; justify-content: space-between; align-items: baseline;
+               gap: 12px; flex-wrap: wrap;
+               padding: 10px 14px; border-bottom: 1px solid #21262d; }
+  .ob-title { font-size: 11px; color: #7d8590; text-transform: uppercase;
+              letter-spacing: 0.5px; font-weight: 600; }
+  .ob-summary { display: inline-flex; gap: 14px; align-items: baseline;
+                font-variant-numeric: tabular-nums; }
+  .ob-best { font-size: 18px; font-weight: 600;
+             display: inline-flex; align-items: baseline; gap: 6px; }
+  .ob-best-qty { font-size: 10px; font-weight: 400; }
+  .ob-spread { font-size: 11px; }
+  .ob-tables { display: grid; grid-template-columns: 1fr 1fr; }
+  .ob-side { padding: 10px 14px; }
+  .ob-side + .ob-side { border-left: 1px solid #21262d; }
+  .ob-side-head { display: flex; justify-content: space-between;
+                  align-items: baseline; margin-bottom: 4px; }
+  .ob-side-title { font-size: 11px; text-transform: uppercase;
+                   letter-spacing: 0.5px; font-weight: 600; }
+  .ob-side .muted { font-size: 10px; }
+  .ob-side table { table-layout: fixed; }
+  .ob-side th { font-size: 10px; color: #7d8590; text-transform: uppercase;
+                letter-spacing: 0.5px; font-weight: 500; padding: 3px 6px;
+                border-bottom: 1px solid #21262d; }
+  .ob-side td { padding: 4px 6px; position: relative; z-index: 1; }
+  .ob-side tr { position: relative; }
+  /* Depth bar fills from the price-side edge of the row (right for bids → green,
+     left for asks → red), so the eye reads "this much qty at this price". */
+  .ob-side-bid tbody tr { background: linear-gradient(to left,
+        rgba(46,160,67,calc(var(--w,0) * 0.0030)) calc(var(--w,0) * 1%),
+        transparent calc(var(--w,0) * 1%)); }
+  .ob-side-ask tbody tr { background: linear-gradient(to right,
+        rgba(248,81,73,calc(var(--w,0) * 0.0030)) calc(var(--w,0) * 1%),
+        transparent calc(var(--w,0) * 1%)); }
+  .ob-footer { padding: 8px 14px; border-top: 1px solid #21262d;
+               display: flex; gap: 18px; font-size: 11px;
+               font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+  .ob-delta { font-variant-numeric: tabular-nums; }
+  .footer { color: #7d8590; font-size: 11px; margin-top: 16px; }
+  .footer code { background: #21262d; padding: 1px 6px; border-radius: 3px; }
+  /* Form controls share these dimensions across header + sell form. */
+  input, select, button { font: inherit; font-size: 12px; box-sizing: border-box; }
+  input, select { background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+                  border-radius: 4px; padding: 5px 8px; height: 28px; }
+  input:focus, select:focus { outline: none; border-color: #58a6ff; }
+  button { background: #1f6f3b; color: #fff; border: 0; padding: 0 12px;
+           border-radius: 4px; cursor: pointer; height: 28px; font-weight: 500; }
+  button:hover { background: #2ea043; }
+  button:disabled { background: #30363d; cursor: not-allowed; color: #7d8590; }
+  /* Header symbol switcher */
+  .switch { display: inline-flex; align-items: center; gap: 6px; }
+  .switch input { width: 110px; text-transform: uppercase; }
+  .err-pill { color: #f85149; font-size: 11px; min-width: 120px; }
+  /* Sell form */
+  .form-card { background: #161b22; border: 1px solid #30363d; padding: 16px;
+               border-radius: 6px; }
+  .form-row { display: grid; grid-template-columns: 120px 1fr; align-items: center;
+              gap: 10px; margin-bottom: 8px; }
+  .form-row label { color: #7d8590; font-size: 11px; }
+  .form-row input, .form-row select { width: 180px; }
+  .form-row .check { width: auto; height: auto; }
+  .submit-row { margin-top: 12px; display: flex; gap: 12px; align-items: center; }
+  .submit-row button { padding: 0 18px; height: 30px; }
+  .submit-msg { font-size: 11px; }
+  .submit-msg.ok { color: #2ea043; }
+  .submit-msg.err { color: #f85149; }
+  details summary { cursor: pointer; color: #7d8590; font-size: 11px; }
+  /* Sessions table */
+  .sess-bar { background: #21262d; height: 6px; border-radius: 3px; overflow: hidden;
+              width: 90px; display: inline-block; vertical-align: middle; }
+  .sess-bar > div { background: #2ea043; height: 100%; }
+  .session-status { text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;
+                    padding: 2px 6px; border-radius: 3px; }
+  .session-status.running { background: #1f6f3b; color: #fff; }
+  .session-status.completed { background: #30363d; color: #c9d1d9; }
+  .session-status.error { background: #5a1f1f; color: #fff; }
+  .session-actions button { background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+                            border-radius: 3px; padding: 0 8px; height: 22px;
+                            font-size: 11px; margin-left: 4px; font-weight: 400; }
+  .session-actions button:hover { background: #30363d; }
+  .session-actions button.danger { background: #5a1f1f; border-color: #da3633; }
+  .session-actions button.danger:hover { background: #7a2a2a; }
+  .session-detail { margin-top: 8px; padding: 8px; background: #0d1117;
+                    border: 1px solid #30363d; border-radius: 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+<h1>
+  <span class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 24" aria-hidden="true">
+      <!-- Stepped descending bars suggesting VWAP-paced execution into the market.
+           Wicks above each candle add a chart feel; rightmost candle is filled
+           green to signal a completed sell. -->
+      <line x1="5" y1="2" x2="5" y2="22" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+      <line x1="13" y1="2" x2="13" y2="22" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+      <line x1="21" y1="2" x2="21" y2="22" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+      <line x1="29" y1="2" x2="29" y2="22" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+      <rect x="2"  y="4"  width="6" height="14" fill="#f85149" rx="1"/>
+      <rect x="10" y="8"  width="6" height="11" fill="#f85149" opacity="0.7" rx="1"/>
+      <rect x="18" y="12" width="6" height="8"  fill="#f85149" opacity="0.55" rx="1"/>
+      <rect x="26" y="6"  width="6" height="16" fill="#2ea043" rx="1"/>
+    </svg>
+    <span class="brand-name">StockTrade</span>
+  </span>
+  <span class="muted">·</span>
+  <span class="switch">
+    <span class="muted" id="cur_sym_label">{{ symbol }}</span>
+    <span class="muted">·</span>
+    <form id="switch_form" style="display:inline-flex; gap:6px; align-items:center;">
+      <input id="sym_in" placeholder="ticker" maxlength="20" autocomplete="off">
+      <button id="sym_go" type="submit">Go</button>
+    </form>
+    <span class="err-pill" id="sym_err"></span>
+  </span>
+  <span class="muted">· {{ exchange }} · {{ segment }}</span>
+  <span class="pill" id="status">connecting…</span>
+</h1>
+
+{% if sessions_enabled %}
+<div class="top-grid">
+  <section class="form-card">
+    <div class="form-title">New sell session
+      <span class="normal">— dry-run only, no real orders placed</span>
+    </div>
+    <form id="sell_form">
+      <div class="form-row">
+        <label for="sell_symbol">Symbol</label>
+        <input id="sell_symbol" value="{{ symbol }}" maxlength="20">
+      </div>
+      <div class="form-row">
+        <label for="sell_qty">Quantity</label>
+        <input id="sell_qty" type="number" min="1" step="1" placeholder="e.g. 100">
+      </div>
+      <div class="form-row">
+        <label for="sell_until">End time (IST)</label>
+        <input id="sell_until" type="text" placeholder="HH:MM" value="15:00" maxlength="5">
+      </div>
+      <div class="form-row">
+        <label for="sell_start">Start time (IST)</label>
+        <input id="sell_start" type="text" placeholder="now" maxlength="5">
+      </div>
+      <div class="form-row">
+        <label for="sell_product">Product</label>
+        <select id="sell_product">
+          <option value="CNC">CNC (delivery)</option>
+          <option value="MIS">MIS (intraday)</option>
+        </select>
+      </div>
+      <details>
+        <summary>Advanced</summary>
+        <div class="form-row" style="margin-top: 8px;">
+          <label for="sell_no_adv">Allow no ADV cap</label>
+          <input id="sell_no_adv" class="check" type="checkbox" checked>
+        </div>
+        <div class="muted" style="font-size: 11px;">
+          Skips the 20-day ADV cap when historical-data API scope is unavailable.
+          Required today; uncheck once your API key has the upgraded tier.
+        </div>
+      </details>
+      <div class="submit-row">
+        <button id="sell_submit" type="submit">Start dry-run sell</button>
+        <span id="sell_msg" class="submit-msg">&nbsp;</span>
+      </div>
+    </form>
+  </section>
+
+  <section class="market-cards">
+    <div class="market-row">
+      <div class="card" id="card-bid">
+        <div class="muted">Bid</div>
+        <div class="big bid-color" id="bid">—</div>
+        <div class="sub" id="bid_qty">&nbsp;</div>
+      </div>
+      <div class="card" id="card-ask">
+        <div class="muted">Ask</div>
+        <div class="big ask-color" id="ask">—</div>
+        <div class="sub" id="ask_qty">&nbsp;</div>
+      </div>
+    </div>
+    <div class="market-row three">
+      <div class="card" id="card-mid">
+        <div class="muted">Mid</div>
+        <div class="big" id="mid">—</div>
+        <div class="sub" id="mid_delta">&nbsp;</div>
+      </div>
+      <div class="card" id="card-spread">
+        <div class="muted">Spread (bps)</div>
+        <div class="big" id="spread">—</div>
+        <div class="sub" id="spread_abs">&nbsp;</div>
+      </div>
+      <div class="card" id="card-last">
+        <div class="muted">Last trade</div>
+        <div class="big" id="last">—</div>
+        <div class="sub">&nbsp;</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="market-ladder">
+    <div class="orderbook">
+      <div class="ob-tables">
+        <div class="ob-side ob-side-bid">
+          <div class="ob-side-head">
+            <span class="ob-side-title bid-color">Bids</span>
+            <span class="muted">top {{ depth_levels }}</span>
+          </div>
+          <table>
+            <thead><tr><th>Price</th><th>Qty</th></tr></thead>
+            <tbody id="bid_ladder"></tbody>
+          </table>
+        </div>
+        <div class="ob-side ob-side-ask">
+          <div class="ob-side-head">
+            <span class="ob-side-title ask-color">Asks</span>
+            <span class="muted">top {{ depth_levels }}</span>
+          </div>
+          <table>
+            <thead><tr><th>Price</th><th>Qty</th></tr></thead>
+            <tbody id="ask_ladder"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+{% else %}
+<div class="row">
+  <div class="card" id="card-bid">
+    <div class="muted">Bid</div>
+    <div class="big bid-color" id="bid">—</div>
+    <div class="sub" id="bid_qty">&nbsp;</div>
+  </div>
+  <div class="card" id="card-ask">
+    <div class="muted">Ask</div>
+    <div class="big ask-color" id="ask">—</div>
+    <div class="sub" id="ask_qty">&nbsp;</div>
+  </div>
+  <div class="card" id="card-mid">
+    <div class="muted">Mid</div>
+    <div class="big" id="mid">—</div>
+    <div class="sub" id="mid_delta">&nbsp;</div>
+  </div>
+  <div class="card" id="card-spread">
+    <div class="muted">Spread (bps)</div>
+    <div class="big" id="spread">—</div>
+    <div class="sub" id="spread_abs">&nbsp;</div>
+  </div>
+  <div class="card" id="card-last">
+    <div class="muted">Last trade</div>
+    <div class="big" id="last">—</div>
+    <div class="sub">&nbsp;</div>
+  </div>
+</div>
+<div class="ladder">
+  <div class="ladder-card">
+    <p class="ladder-title">Bids (top {{ depth_levels }})</p>
+    <table>
+      <thead><tr><th>Lvl</th><th>Price</th><th>Qty</th></tr></thead>
+      <tbody id="bid_ladder"></tbody>
+    </table>
+  </div>
+  <div class="ladder-card">
+    <p class="ladder-title">Asks (top {{ depth_levels }})</p>
+    <table>
+      <thead><tr><th>Lvl</th><th>Price</th><th>Qty</th></tr></thead>
+      <tbody id="ask_ladder"></tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if sessions_enabled %}
+<h2>Sessions</h2>
+<table id="sessions_table">
+  <thead><tr>
+    <th>ID</th><th>Symbol</th><th>Filled</th><th>Slippage (bps)</th>
+    <th>Started</th><th>Status</th><th style="text-align:right">Actions</th>
+  </tr></thead>
+  <tbody id="sessions_tbody">
+    <tr><td colspan="7" class="muted" style="text-align:center;">No sessions yet</td></tr>
+  </tbody>
+</table>
+<div id="session_detail_container"></div>
+{% endif %}
+
+<div class="footer">
+  <span>seq: <code id="seq">0</code></span>
+  &nbsp;·&nbsp;
+  <span>cached: <code id="cached">0</code></span>
+  &nbsp;·&nbsp;
+  <span>feed ts: <code id="feed_ts">—</code></span>
+  &nbsp;·&nbsp;
+  <span>server ts: <code id="server_ts">—</code></span>
+  &nbsp;·&nbsp;
+  <span id="reconnect_info"></span>
+  &nbsp;·&nbsp;
+  <span>auth: <code>{{ "on" if auth_enabled else "off" }}</code></span>
+</div>
+
+<script>
+(function () {
+  // ---------- state ----------
+  let currentSymbol = {{ symbol|tojson }};
+  let storageKey = 'monitor:' + currentSymbol;
+  const MAX_BUFFER = 300;
+  const STALE_AFTER_MS = 4000;
+  const MAX_BACKOFF_MS = 10000;
+  const INITIAL_BACKOFF_MS = 500;
+
+  let buffer = [];
+  let lastSeq = 0;
+  let prevMid = null;
+  let ws = null;
+  let backoff = INITIAL_BACKOFF_MS;
+  let lastTickAt = 0;
+  let reconnectTimer = null;
+  let expandedSessionId = null;
+
+  // ---------- DOM helpers ----------
+  function $(id) { return document.getElementById(id); }
+  function fmt2(x) { return (x === null || x === undefined) ? '—' : Number(x).toFixed(2); }
+  function setStatus(s, t) {
+    const el = $('status');
+    el.textContent = t;
+    el.style.background = s === 'live' ? '#1f6f3b'
+                       : s === 'connecting' ? '#1f4a6f'
+                       : s === 'stale' ? '#5a4a1f'
+                       : '#5a1f1f';
+  }
+
+  // ---------- localStorage ----------
+  function loadCache(symbol) {
+    try {
+      const saved = JSON.parse(localStorage.getItem('monitor:' + symbol) || '[]');
+      return Array.isArray(saved) ? saved.slice(-MAX_BUFFER) : [];
+    } catch (e) { return []; }
+  }
+  function persist() {
+    try { localStorage.setItem(storageKey, JSON.stringify(buffer)); } catch (e) {}
+  }
+
+  // ---------- render ----------
+  function render(s, fromCache) {
+    if (!s) return;
+    const bid = s.bids[0].price, ask = s.asks[0].price;
+    $('bid').textContent = fmt2(bid);
+    $('ask').textContent = fmt2(ask);
+    $('mid').textContent = fmt2(s.mid);
+    $('spread').textContent = s.spread_bps.toFixed(1);
+    $('spread_abs').textContent = '₹' + fmt2(s.spread_abs);
+    $('bid_qty').textContent = 'qty ' + s.bids[0].qty.toLocaleString();
+    $('ask_qty').textContent = 'qty ' + s.asks[0].qty.toLocaleString();
+    $('last').textContent = fmt2(s.last_trade);
+    $('seq').textContent = s.seq;
+    $('feed_ts').textContent = s.feed_ts_ms ? new Date(s.feed_ts_ms).toLocaleTimeString() : '—';
+    $('server_ts').textContent = new Date(s.ts).toLocaleTimeString();
+
+    if (prevMid !== null && !fromCache) {
+      const d = s.mid - prevMid;
+      const el = $('mid_delta');
+      el.textContent = (d >= 0 ? '+' : '') + d.toFixed(2);
+      el.style.color = d > 0 ? '#2ea043' : d < 0 ? '#f85149' : '#7d8590';
+    }
+    prevMid = s.mid;
+
+    const maxBidQty = Math.max(...s.bids.map(b => b.qty)) || 1;
+    const maxAskQty = Math.max(...s.asks.map(a => a.qty)) || 1;
+    // `--w` is the normalized 0..100 depth percentage; the CSS gradient on
+    // .ob-side-bid/-ask rows uses it to draw the horizontal qty bar.
+    $('bid_ladder').innerHTML = s.bids.map((b) => {
+      const w = Math.round((b.qty / maxBidQty) * 100);
+      return `<tr style="--w:${w}"><td class="bid-color">${fmt2(b.price)}</td>` +
+             `<td>${b.qty.toLocaleString()}</td></tr>`;
+    }).join('');
+    $('ask_ladder').innerHTML = s.asks.map((a) => {
+      const w = Math.round((a.qty / maxAskQty) * 100);
+      return `<tr style="--w:${w}"><td class="ask-color">${fmt2(a.price)}</td>` +
+             `<td>${a.qty.toLocaleString()}</td></tr>`;
+    }).join('');
+  }
+
+  function clearMarketUI() {
+    ['bid','ask','mid','spread','last'].forEach(id => $(id).textContent = '—');
+    $('spread_abs').textContent = ' ';
+    $('bid_qty').textContent = ' ';
+    $('ask_qty').textContent = ' ';
+    $('mid_delta').textContent = ' ';
+    $('bid_ladder').innerHTML = '';
+    $('ask_ladder').innerHTML = '';
+    prevMid = null;
+  }
+
+  function loadAndRenderCache() {
+    buffer = loadCache(currentSymbol);
+    lastSeq = 0;  // server's seq counter restarted for this symbol
+    if (buffer.length) render(buffer[buffer.length - 1], /*fromCache*/ true);
+    $('cached').textContent = buffer.length;
+  }
+
+  function applyTick(s) {
+    if (!s || typeof s.seq !== 'number') return;
+    if (s.seq <= lastSeq) return;
+    lastSeq = s.seq;
+    buffer.push(s);
+    if (buffer.length > MAX_BUFFER) buffer = buffer.slice(-MAX_BUFFER);
+    persist();
+    $('cached').textContent = buffer.length;
+    lastTickAt = Date.now();
+    render(s, false);
+  }
+
+  // ---------- symbol switch ----------
+  function setActiveSymbol(symbol) {
+    currentSymbol = symbol;
+    storageKey = 'monitor:' + symbol;
+    $('cur_sym_label').textContent = symbol;
+    $('sell_symbol') && ($('sell_symbol').value = symbol);
+    document.title = 'monitor · ' + symbol;
+    history.replaceState(null, '', '?symbol=' + encodeURIComponent(symbol));
+    clearMarketUI();
+    loadAndRenderCache();
+  }
+
+  $('switch_form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const sym = ($('sym_in').value || '').trim().toUpperCase();
+    if (!sym) return;
+    $('sym_go').disabled = true;
+    $('sym_err').textContent = '';
+    try {
+      const r = await fetch('/api/symbol', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ symbol: sym }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        $('sym_err').textContent = (d.detail && d.detail.error) || 'switch failed';
+      } else {
+        // setActiveSymbol() will also be triggered by the server's
+        // symbol_changed WS broadcast, but call it now for immediate UI update.
+        setActiveSymbol(d.symbol);
+        $('sym_in').value = '';
+      }
+    } catch (e) {
+      $('sym_err').textContent = 'network error';
+    } finally {
+      $('sym_go').disabled = false;
+    }
+  });
+
+  // Honor ?symbol= on page load (if differs from server's current symbol).
+  const urlSymbol = new URLSearchParams(location.search).get('symbol');
+  // ---------- WebSocket ----------
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    setStatus('error', `disconnected · retry in ${(backoff/1000).toFixed(1)}s`);
+    $('reconnect_info').textContent =
+      `next retry: ${(backoff/1000).toFixed(1)}s · backoff capped at ${MAX_BACKOFF_MS/1000}s`;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, backoff);
+    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+  }
+
+  function connect() {
+    setStatus('connecting', 'connecting…');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    try {
+      ws = new WebSocket(`${proto}://${location.host}/ws/depth`);
+    } catch (e) { scheduleReconnect(); return; }
+    ws.onopen = () => {
+      backoff = INITIAL_BACKOFF_MS;
+      $('reconnect_info').textContent = '';
+      ws.send(JSON.stringify({ since_seq: lastSeq }));
+    };
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+      if (m.type === 'hello') {
+        // If URL says one symbol but server is on another, ask the server to switch.
+        if (urlSymbol && m.symbol !== urlSymbol && !window.__asked_switch) {
+          window.__asked_switch = true;
+          fetch('/api/symbol', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ symbol: urlSymbol }),
+          }).catch(() => {});
+        } else if (m.symbol !== currentSymbol) {
+          setActiveSymbol(m.symbol);
+        }
+        setStatus('live', m.backfill_count > 0 ? `live · backfilled ${m.backfill_count}` : 'live');
+      } else if (m.type === 'tick') {
+        applyTick(m.snapshot);
+        setStatus('live', 'live');
+      } else if (m.type === 'symbol_changed') {
+        setActiveSymbol(m.symbol);
+        setStatus('live', 'live · symbol switched');
+      }
+    };
+    ws.onclose = scheduleReconnect;
+    ws.onerror = () => {};
+  }
+
+  // ---------- sessions ----------
+  {% if sessions_enabled %}
+  async function refreshSessions() {
+    try {
+      const r = await fetch('/api/sessions');
+      if (!r.ok) return;
+      const d = await r.json();
+      renderSessions(d.sessions || []);
+    } catch (e) {}
+  }
+
+  function renderSessions(sessions) {
+    const tbody = $('sessions_tbody');
+    if (!sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center;">No sessions yet</td></tr>';
+      $('session_detail_container').innerHTML = '';
+      return;
+    }
+    tbody.innerHTML = sessions.map(s => {
+      const idShort = s.session_id.slice(-10);
+      const pct = (s.filled_pct || 0).toFixed(1);
+      const slip = s.slippage_bps !== null && s.slippage_bps !== undefined
+                   ? s.slippage_bps.toFixed(1) : '—';
+      const started = new Date(s.started_at).toLocaleTimeString();
+      const status = s.status || 'running';
+      const killBtn = status === 'running'
+        ? `<button class="danger" data-kill="${s.session_id}">Kill</button>` : '';
+      return `<tr>
+        <td><code>${idShort}</code></td>
+        <td>${s.symbol}</td>
+        <td>${s.filled_qty} / ${s.total_qty}
+          <span class="sess-bar"><div style="width:${pct}%"></div></span>
+          <span class="muted">${pct}%</span></td>
+        <td>${slip}</td>
+        <td>${started}</td>
+        <td><span class="session-status ${status}">${status}</span></td>
+        <td class="session-actions" style="text-align:right">
+          <button data-view="${s.session_id}">${expandedSessionId === s.session_id ? 'Hide' : 'View'}</button>
+          ${killBtn}
+        </td>
+      </tr>`;
+    }).join('');
+    // Render expanded detail under the table if any.
+    if (expandedSessionId) {
+      const s = sessions.find(x => x.session_id === expandedSessionId);
+      if (s) {
+        $('session_detail_container').innerHTML = `<div class="session-detail">
+          <div><strong>${s.session_id}</strong> · ${s.symbol} · ${s.exchange || ''} · ${s.product || ''}
+          ${s.dry_run ? '<span class="pill" style="background:#5a4a1f">DRY-RUN</span>' : ''}</div>
+          <div class="muted" style="margin: 4px 0">
+            window ${new Date(s.window_start).toLocaleTimeString()} → ${new Date(s.window_end).toLocaleTimeString()}
+            · arrival_mid ${s.arrival_mid || '—'}
+            · avg_fill ${s.avg_fill_price ? s.avg_fill_price.toFixed(2) : '—'}
+          </div>
+          ${s.error ? `<div style="color:#f85149">${s.error}</div>` : ''}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px">
+            <div>
+              <div class="muted">Schedule (${s.buckets.length} buckets)</div>
+              <table><thead><tr><th>#</th><th>Start</th><th>End</th><th>Planned</th><th>Filled</th></tr></thead>
+              <tbody>${s.buckets.slice(0,30).map(b =>
+                `<tr><td>${b.index}</td>
+                 <td>${new Date(b.start).toLocaleTimeString()}</td>
+                 <td>${new Date(b.end).toLocaleTimeString()}</td>
+                 <td>${b.planned}</td><td>${b.filled}</td></tr>`).join('')}</tbody></table>
+            </div>
+            <div>
+              <div class="muted">Child orders (${s.children.length})</div>
+              <table><thead><tr><th>ID</th><th>Bkt</th><th>Qty</th><th>Filled</th><th>Price</th><th>Status</th></tr></thead>
+              <tbody>${s.children.slice(-30).map(c =>
+                `<tr><td><code>${c.id.slice(-8)}</code></td><td>${c.bucket}</td>
+                 <td>${c.qty}</td><td>${c.filled}</td>
+                 <td>${c.price || '—'}</td><td>${c.status}</td></tr>`).join('')}</tbody></table>
+            </div>
+          </div>
+        </div>`;
+      }
+    } else {
+      $('session_detail_container').innerHTML = '';
+    }
+  }
+
+  $('sessions_tbody').addEventListener('click', async (e) => {
+    const view = e.target.dataset.view;
+    const kill = e.target.dataset.kill;
+    if (view) {
+      expandedSessionId = (expandedSessionId === view) ? null : view;
+      await refreshSessions();
+    } else if (kill) {
+      if (!confirm('Stop session ' + kill.slice(-10) + '?')) return;
+      try {
+        await fetch('/api/sessions/' + kill + '/kill', { method: 'POST' });
+        await refreshSessions();
+      } catch (_) {}
+    }
+  });
+
+  $('sell_form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = {
+      symbol: $('sell_symbol').value.trim().toUpperCase(),
+      qty: parseInt($('sell_qty').value, 10),
+      until: $('sell_until').value.trim(),
+      start: $('sell_start').value.trim() || null,
+      product: $('sell_product').value,
+      allow_no_adv_cap: $('sell_no_adv').checked,
+    };
+    $('sell_submit').disabled = true;
+    $('sell_msg').textContent = 'starting…';
+    $('sell_msg').className = 'submit-msg';
+    try {
+      const r = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        $('sell_msg').textContent = 'started ' + d.session_id;
+        $('sell_msg').className = 'submit-msg ok';
+        await refreshSessions();
+      } else {
+        const msg = (d.detail && (d.detail.error || JSON.stringify(d.detail))) || d.detail || 'failed';
+        $('sell_msg').textContent = msg;
+        $('sell_msg').className = 'submit-msg err';
+      }
+    } catch (e) {
+      $('sell_msg').textContent = 'network error';
+      $('sell_msg').className = 'submit-msg err';
+    } finally {
+      $('sell_submit').disabled = false;
+    }
+  });
+
+  refreshSessions();
+  setInterval(refreshSessions, 2000);
+  {% endif %}
+
+  // ---------- staleness + lifecycle ----------
+  setInterval(() => {
+    const stale = lastTickAt && (Date.now() - lastTickAt > STALE_AFTER_MS);
+    document.querySelectorAll('.card, .orderbook').forEach(c => c.classList.toggle('stale', !!stale));
+    if (stale && ws && ws.readyState === WebSocket.OPEN) setStatus('stale', 'connected · no new ticks');
+  }, 1000);
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && (!ws || ws.readyState >= WebSocket.CLOSING)) {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      backoff = INITIAL_BACKOFF_MS;
+      connect();
+    }
+  });
+
+  loadAndRenderCache();
+  connect();
+})();
+</script>
+</body>
+</html>

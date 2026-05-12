@@ -43,9 +43,11 @@ class GrowwMarketData:
         self._poll_interval = poll_interval_sec
         self._instrument: dict[str, Any] | None = None
         self._latest_quote: Quote | None = None
+        self._latest_raw_depth: dict[str, Any] | None = None
         self._pending_order_updates: list[dict[str, Any]] = []
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
+        self._switch_lock = asyncio.Lock()
 
     async def start(self) -> None:
         self._instrument = await asyncio.to_thread(
@@ -66,6 +68,7 @@ class GrowwMarketData:
         while not self._stopped.is_set():
             try:
                 depth_dict = await asyncio.to_thread(self._feed.get_market_depth)
+                self._latest_raw_depth = depth_dict
                 self._latest_quote = _parse_depth_to_quote(depth_dict, self._instrument)
                 update = await asyncio.to_thread(self._feed.get_equity_order_update)
                 if update:
@@ -76,6 +79,92 @@ class GrowwMarketData:
                 await asyncio.wait_for(self._stopped.wait(), timeout=self._poll_interval)
             except TimeoutError:
                 pass
+
+    @property
+    def latest_raw_depth(self) -> dict[str, Any] | None:
+        """Sync snapshot of the most recent raw market depth dict (all tokens)."""
+        return self._latest_raw_depth
+
+    @property
+    def trading_symbol(self) -> str:
+        return self._symbol
+
+    @property
+    def exchange_token(self) -> str | None:
+        if not self._instrument:
+            return None
+        return str(self._instrument.get("exchange_token"))
+
+    @property
+    def latest_payload(self) -> dict[str, Any] | None:
+        """The depth payload for THIS instance's instrument only.
+
+        Drills `{exchange: {segment: {token: payload}}}` and pulls the entry
+        matching our exchange_token so multiple concurrent subscriptions
+        (e.g. monitor + sell session for different symbols) don't cross-talk.
+        """
+        token = self.exchange_token
+        raw = self._latest_raw_depth
+        if not token or not isinstance(raw, dict):
+            return None
+        by_exch = raw.get(self._exchange)
+        if not isinstance(by_exch, dict):
+            return None
+        by_seg = by_exch.get(self._segment)
+        if not isinstance(by_seg, dict):
+            return None
+        payload = by_seg.get(token)
+        return payload if isinstance(payload, dict) else None
+
+    async def switch_symbol(self, new_symbol: str) -> dict[str, Any]:
+        """Swap the active instrument: unsubscribe old, subscribe new.
+
+        Returns the new instrument dict. Raises KeyError when the symbol is
+        unknown so callers can render an inline error without falling over.
+        """
+        from growwapi.groww.exceptions import InstrumentNotFoundException
+
+        new_symbol = new_symbol.upper().strip()
+        async with self._switch_lock:
+            if new_symbol == self._symbol and self._instrument is not None:
+                return self._instrument
+            try:
+                new_instrument = await asyncio.to_thread(
+                    self._api.get_instrument_by_exchange_and_trading_symbol,
+                    self._exchange, new_symbol,
+                )
+            except InstrumentNotFoundException as exc:
+                raise KeyError(new_symbol) from exc
+            if not new_instrument or "exchange_token" not in new_instrument:
+                raise KeyError(new_symbol)
+            old_instrument = self._instrument
+            if old_instrument is not None:
+                try:
+                    await asyncio.to_thread(
+                        self._feed.unsubscribe_market_depth,
+                        [{
+                            "exchange": self._exchange,
+                            "segment": self._segment,
+                            "exchange_token": old_instrument["exchange_token"],
+                        }],
+                    )
+                except Exception as exc:  # noqa: BLE001 — SDK errors here are non-fatal
+                    log.warning("unsubscribe failed for %s: %s", self._symbol, exc)
+            await asyncio.to_thread(
+                self._feed.subscribe_market_depth,
+                [{
+                    "exchange": self._exchange,
+                    "segment": self._segment,
+                    "exchange_token": new_instrument["exchange_token"],
+                }],
+            )
+            self._instrument = new_instrument
+            self._symbol = new_symbol
+            self._latest_quote = None
+            self._latest_raw_depth = None
+            log.info("Switched market data subscription to %s on %s",
+                     new_symbol, self._exchange)
+            return new_instrument
 
     async def latest_quote(self) -> Quote | None:
         return self._latest_quote
@@ -96,33 +185,71 @@ class GrowwMarketData:
 def _parse_depth_to_quote(depth_dict: Any, instrument: Any) -> Quote | None:
     """Map a GrowwFeed market-depth payload to our Quote type.
 
-    The exact shape is determined at runtime; we look for plausible field names
-    so the same code handles snake_case and camelCase responses without coupling
-    to a particular SDK release.
+    Real shape from Groww: {exchange: {segment: {exchange_token: {tsInMillis,
+    buyBook, sellBook}}}} where buyBook/sellBook are dicts keyed by "1".."N"
+    level strings, with {price, qty}. We also tolerate flat shapes (legacy/test).
     """
-    if not depth_dict:
+    payload = _extract_depth_payload(depth_dict)
+    if payload is None:
         return None
-    # The dict is keyed by exchange_token or topic; pull the first non-empty entry.
-    payload: Any = depth_dict
-    if isinstance(depth_dict, dict):
-        for v in depth_dict.values():
-            if isinstance(v, dict) and v:
-                payload = v
-                break
-    bids = payload.get("buy") or payload.get("bids") or []
-    asks = payload.get("sell") or payload.get("asks") or []
+    bids = _sorted_levels(payload.get("buyBook") or payload.get("buy") or payload.get("bids"))
+    asks = _sorted_levels(payload.get("sellBook") or payload.get("sell") or payload.get("asks"))
     if not bids or not asks:
         return None
-    top_bid = bids[0]
-    top_ask = asks[0]
+    top_bid, top_ask = bids[0], asks[0]
     return Quote(
         timestamp=datetime.now(tz=IST),
-        bid=Decimal(str(top_bid.get("price"))),
-        ask=Decimal(str(top_ask.get("price"))),
-        bid_qty=int(top_bid.get("quantity", 0)),
-        ask_qty=int(top_ask.get("quantity", 0)),
-        last_trade=Decimal(str(payload["ltp"])) if "ltp" in payload else None,
+        bid=Decimal(str(top_bid["price"])),
+        ask=Decimal(str(top_ask["price"])),
+        bid_qty=int(top_bid["qty"]),
+        ask_qty=int(top_ask["qty"]),
+        last_trade=Decimal(str(payload["ltp"])) if payload.get("ltp") is not None else None,
     )
+
+
+def _extract_depth_payload(depth_dict: Any) -> dict[str, Any] | None:
+    """Drill through nested {exchange:{segment:{token: payload}}} to find the
+    first dict containing buyBook/sellBook (or buy/sell/bids/asks)."""
+    if not isinstance(depth_dict, dict):
+        return None
+    if any(k in depth_dict for k in ("buyBook", "sellBook", "buy", "sell", "bids", "asks")):
+        return depth_dict
+    for v in depth_dict.values():
+        inner = _extract_depth_payload(v)
+        if inner is not None:
+            return inner
+    return None
+
+
+def _sorted_levels(book: Any) -> list[dict[str, Any]]:
+    """Normalize a depth book (dict keyed by '1'..'N', or already-a-list) into a
+    list of {price, qty} dicts sorted by level index ascending (1 = best)."""
+    if book is None:
+        return []
+    if isinstance(book, dict):
+        try:
+            items = sorted(book.items(), key=lambda kv: int(kv[0]))
+        except (TypeError, ValueError):
+            items = list(book.items())
+        levels = [v for _, v in items if isinstance(v, dict)]
+    elif isinstance(book, list):
+        levels = [x for x in book if isinstance(x, dict)]
+    else:
+        return []
+    out: list[dict[str, Any]] = []
+    for lvl in levels:
+        price = lvl.get("price")
+        qty = lvl.get("qty", lvl.get("quantity", 0))
+        if price is None:
+            continue
+        price_f = float(price)
+        # Groww sometimes returns zero-priced filler levels (e.g. after market
+        # close or during pre-open auction). Skip these — they aren't a real
+        # book and would corrupt mid/spread calculations downstream.
+        if price_f <= 0:
+            continue
+        out.append({"price": price_f, "qty": int(qty or 0)})
+    return out
 
 
 class FakeMarketData:

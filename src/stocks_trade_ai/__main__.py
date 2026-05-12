@@ -82,16 +82,18 @@ def sell(
         segment=segment, product=product, side=Side.SELL, total_qty=qty,
         window_start=start_dt, window_end=end_dt, dry_run=dry_run, arrival_mid=None,
     )
-    asyncio.run(_run_sell(settings, parent))
+    # GrowwFeed.__init__ runs its own asyncio loop synchronously; must build the
+    # client BEFORE entering asyncio.run, or it raises "loop already running".
+    api, feed = build_client(settings)
+    asyncio.run(_run_sell(settings, parent, api, feed))
 
 
-async def _run_sell(settings, parent: ParentOrder) -> None:
+async def _run_sell(settings, parent: ParentOrder, api, feed) -> None:
     from .broker import GrowwBroker
     from .market_data import GrowwMarketData
     from .rate_limiter import RateLimiter
     from .volume_profile import median_volume_profile
 
-    api, feed = build_client(settings)
     limiter = RateLimiter(per_sec=8, per_min=200, name="orders")
     broker = GrowwBroker(api, limiter)
     md = GrowwMarketData(
@@ -156,19 +158,43 @@ def _replace_arrival_mid(p: ParentOrder, mid):
 
 
 async def _fetch_history(api, parent: ParentOrder):
+    """Fetch ~20 days of 5-min candles. Returns ([], 0.0) and warns if the API
+    key lacks the historical-data scope (caller should set allow_no_adv_cap)."""
     from datetime import timedelta
+
+    from growwapi.groww.exceptions import GrowwAPIException
 
     from .types import OHLCBar
 
     end = parent.window_start
     start = end - timedelta(days=30)  # 30 calendar to cover 20 trading days
-    resp = await asyncio.to_thread(
-        api.get_historical_candles,
-        exchange=parent.exchange, segment=parent.segment,
-        groww_symbol=parent.symbol,
-        start_time=start.isoformat(), end_time=end.isoformat(),
-        candle_interval=api.CANDLE_INTERVAL_MIN_5,
+    # SDK requires the namespaced groww_symbol (e.g. "NSE-GROWW"), not the bare ticker.
+    instrument = await asyncio.to_thread(
+        api.get_instrument_by_exchange_and_trading_symbol,
+        parent.exchange, parent.symbol,
     )
+    groww_symbol = instrument["groww_symbol"] if instrument else parent.symbol
+    # SDK wants 'yyyy-MM-dd HH:mm:ss' (no T, no tz offset).
+    fmt = "%Y-%m-%d %H:%M:%S"
+    try:
+        resp = await asyncio.to_thread(
+            api.get_historical_candles,
+            exchange=parent.exchange, segment=parent.segment,
+            groww_symbol=groww_symbol,
+            start_time=start.strftime(fmt), end_time=end.strftime(fmt),
+            candle_interval=api.CANDLE_INTERVAL_MIN_5,
+        )
+    except GrowwAPIException as exc:
+        msg = str(exc).lower()
+        if "forbidden" in msg or "permission" in msg or "unauthorized" in msg:
+            logging.getLogger(__name__).warning(
+                "Historical-data scope missing for this API key (%s). "
+                "Engine will run with uniform 5-min profile and no ADV cap. "
+                "Upgrade the Groww API tier to enable ADV-based risk checks.",
+                exc,
+            )
+            return [], 0.0
+        raise
     raw = resp.get("candles") or resp.get("data") or []
     bars: list[OHLCBar] = []
     daily: dict[date, int] = {}
@@ -197,6 +223,58 @@ def _parse_hhmm_today(hhmm: str) -> datetime:
     h, m = hhmm.split(":")
     t = time(int(h), int(m))
     return datetime.combine(datetime.now(tz=IST).date(), t, tzinfo=IST)
+
+
+@app.command()
+def monitor(
+    symbol: str = typer.Option(..., help="Trading symbol, e.g. RELIANCE"),
+    exchange: str = typer.Option("NSE", help="NSE or BSE"),
+    segment: str = typer.Option("CASH"),
+    bind: str = typer.Option("127.0.0.1:8080", help="host:port for dashboard"),
+) -> None:
+    """Live market-data monitor for a single symbol (no trading, no historical data)."""
+    settings = load_settings()
+    _setup_logging(settings.log_level)
+    _redact_logger()
+    # build_client must run before asyncio.run (GrowwFeed inits its own loop).
+    api, feed = build_client(settings)
+    asyncio.run(_run_monitor(settings, api, feed, symbol.upper(), exchange, segment, bind))
+
+
+async def _run_monitor(settings, api, feed, symbol, exchange, segment, bind) -> None:
+    import uvicorn
+
+    from .dashboard.monitor import DepthHub, MonitorState, create_monitor_app, producer_loop
+    from .dashboard.session_registry import SessionRegistry
+    from .market_data import GrowwMarketData
+
+    md = GrowwMarketData(
+        api, feed, exchange=exchange, trading_symbol=symbol, segment=segment,
+    )
+    await md.start()
+    hub = DepthHub()
+    state = MonitorState(market_data=md, hub=hub)
+    registry = SessionRegistry(settings, api, feed, history_fetcher=_fetch_history)
+    producer_task = asyncio.create_task(producer_loop(state), name="monitor-producer")
+
+    host, port = bind.split(":", 1)
+    cfg = uvicorn.Config(
+        create_monitor_app(state, registry),
+        host=host, port=int(port),
+        log_level="warning", access_log=False,
+    )
+    server = uvicorn.Server(cfg)
+    typer.secho(f"StockTrade: http://{bind}/  ({symbol} on {exchange})", fg="cyan")
+    try:
+        await server.serve()
+    finally:
+        producer_task.cancel()
+        try:
+            await producer_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await registry.shutdown()
+        await md.aclose()
 
 
 @app.command()
