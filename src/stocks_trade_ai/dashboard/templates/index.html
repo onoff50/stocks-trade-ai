@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>stocks-trade-ai · {{ session_id }}</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #0d1117; color: #e6edf3; margin: 0; padding: 20px; }
+  h1 { font-size: 16px; margin: 0 0 10px; color: #58a6ff; }
+  .row { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 20px; }
+  .card { background: #161b22; border: 1px solid #30363d; padding: 12px 16px;
+          border-radius: 6px; min-width: 220px; }
+  .big { font-size: 24px; font-weight: 600; }
+  .progress { background: #21262d; height: 10px; border-radius: 5px; overflow: hidden;
+              width: 100%; margin-top: 6px; }
+  .progress > div { background: #2ea043; height: 100%; transition: width 0.3s; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #21262d; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  .kill { background: #da3633; color: #fff; border: 0; padding: 8px 16px;
+          border-radius: 6px; cursor: pointer; font-size: 14px; }
+  .kill:hover { background: #f85149; }
+  .muted { color: #7d8590; }
+  .dry { color: #d29922; }
+</style>
+</head>
+<body>
+<h1>stocks-trade-ai · <span class="muted">{{ session_id }}</span></h1>
+<div id="dry"></div>
+<div class="row">
+  <div class="card">
+    <div class="muted">Symbol</div>
+    <div class="big" id="symbol">—</div>
+  </div>
+  <div class="card">
+    <div class="muted">Filled / Total</div>
+    <div class="big"><span id="filled">0</span> / <span id="total">0</span></div>
+    <div class="progress"><div id="bar" style="width:0%"></div></div>
+  </div>
+  <div class="card">
+    <div class="muted">Arrival mid</div>
+    <div class="big" id="arrival">—</div>
+  </div>
+  <div class="card">
+    <div class="muted">Realized avg</div>
+    <div class="big" id="avg">—</div>
+  </div>
+  <div class="card">
+    <div class="muted">Slippage (bps)</div>
+    <div class="big" id="slippage">—</div>
+  </div>
+  <div class="card">
+    <button class="kill" onclick="killSession()">Kill session</button>
+  </div>
+</div>
+
+<h2 style="font-size:14px">Schedule</h2>
+<table>
+  <thead><tr><th>#</th><th>Start</th><th>End</th><th>Planned</th><th>Filled</th></tr></thead>
+  <tbody id="buckets"></tbody>
+</table>
+
+<h2 style="font-size:14px">Child orders</h2>
+<table>
+  <thead><tr><th>ID</th><th>Bucket</th><th>Qty</th><th>Filled</th><th>Price</th><th>Status</th></tr></thead>
+  <tbody id="children"></tbody>
+</table>
+
+<script>
+async function tick() {
+  try {
+    const r = await fetch('/state');
+    if (!r.ok) throw new Error('state unavailable');
+    const s = await r.json();
+    document.getElementById('symbol').textContent = s.symbol;
+    document.getElementById('filled').textContent = s.filled_qty;
+    document.getElementById('total').textContent = s.total_qty;
+    document.getElementById('bar').style.width = s.filled_pct.toFixed(1) + '%';
+    document.getElementById('arrival').textContent = s.arrival_mid ?? '—';
+    document.getElementById('avg').textContent = s.avg_fill_price ? s.avg_fill_price.toFixed(2) : '—';
+    if (s.arrival_mid && s.avg_fill_price) {
+      const bps = (parseFloat(s.arrival_mid) - s.avg_fill_price) / parseFloat(s.arrival_mid) * 10000;
+      document.getElementById('slippage').textContent = bps.toFixed(1);
+    }
+    document.getElementById('dry').innerHTML = s.dry_run ? '<p class="dry">DRY-RUN: no real orders placed</p>' : '';
+    document.getElementById('buckets').innerHTML = s.buckets.map(b =>
+      `<tr><td>${b.index}</td><td>${b.start.slice(11,16)}</td><td>${b.end.slice(11,16)}</td><td>${b.planned}</td><td>${b.filled}</td></tr>`
+    ).join('');
+    document.getElementById('children').innerHTML = s.children.map(c =>
+      `<tr><td>${c.id}</td><td>${c.bucket}</td><td>${c.qty}</td><td>${c.filled}</td><td>${c.price ?? '-'}</td><td>${c.status}</td></tr>`
+    ).join('');
+  } catch (e) {
+    document.getElementById('symbol').textContent = '(disconnected)';
+  }
+}
+async function killSession() {
+  if (!confirm('Kill this session? Open orders will be cancelled.')) return;
+  await fetch('/kill', { method: 'POST' });
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>

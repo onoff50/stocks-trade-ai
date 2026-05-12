@@ -1,0 +1,54 @@
+[project]
+name = "stocks-trade-ai"
+version = "0.1.0"
+description = "VWAP execution tool for personal stock sales on Groww"
+authors = [
+    { email = "neeraj.singh@groww.in" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "growwapi",
+    "pyotp>=2.9",
+    "python-dotenv>=1.0",
+    "aiosqlite>=0.20",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "jinja2>=3.1",
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "typer>=0.12",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "freezegun>=1.5",
+]
+
+[project.scripts]
+stocks-trade-ai = "stocks_trade_ai.__main__:app"
+
+[build-system]
+requires = ["uv_build>=0.8.21,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
