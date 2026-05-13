@@ -63,6 +63,9 @@ class SellRequest:
     # The route handler must already have enforced the ALLOW_LIVE_TRADES env
     # gate before constructing a SellRequest with dry_run=False.
     dry_run: bool = True
+    # Optional floor price: child orders are not placed when the best bid is
+    # below this value. None disables the check.
+    min_price: Decimal | None = None
 
 
 class SessionRegistry:
@@ -154,6 +157,7 @@ class SessionRegistry:
                 allow_no_adv_cap=req.allow_no_adv_cap,
                 child_min_qty=req.child_min_qty,
                 child_max_qty=req.child_max_qty,
+                min_price=req.min_price,
             )
 
             running = RunningSession(

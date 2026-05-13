@@ -355,6 +355,8 @@ class _SellBody(BaseModel):
     allow_no_adv_cap: bool = True
     child_min_qty: int | None = Field(default=None, gt=0, le=10_000_000)
     child_max_qty: int | None = Field(default=None, gt=0, le=10_000_000)
+    # Optional price floor — engine skips child placement while bid < this.
+    min_price: float | None = Field(default=None, gt=0, le=10_000_000)
     # dry_run defaults to True. Live trades require dry_run=False AND the
     # ALLOW_LIVE_TRADES env var set; the route handler enforces the env gate.
     dry_run: bool = True
@@ -633,6 +635,7 @@ def create_monitor_app(
                     status_code=422,
                     detail={"error": "window_end must be after window_start"},
                 )
+            from decimal import Decimal as _D
             req = SellRequest(
                 symbol=body.symbol, qty=body.qty,
                 window_start=start_dt, window_end=end_dt,
@@ -640,6 +643,7 @@ def create_monitor_app(
                 allow_no_adv_cap=body.allow_no_adv_cap,
                 child_min_qty=body.child_min_qty,
                 child_max_qty=body.child_max_qty,
+                min_price=_D(str(body.min_price)) if body.min_price is not None else None,
                 dry_run=body.dry_run,
             )
             if not body.dry_run:

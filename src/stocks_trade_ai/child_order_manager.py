@@ -50,6 +50,7 @@ class ChildOrderManager:
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         child_min_qty: int | None = None,
         child_max_qty: int | None = None,
+        min_price: Decimal | None = None,
         rng: random.Random | None = None,
         now: callable = lambda: datetime.now(tz=IST),
     ) -> None:
@@ -62,6 +63,9 @@ class ChildOrderManager:
         self._poll_interval = poll_interval
         self._child_min = child_min_qty
         self._child_max = child_max_qty
+        # Price floor: if the best bid is below this, the manager will not place
+        # the next chunk and will wait for the next tick. None = no floor.
+        self._min_price = min_price
         self._rng = rng or random.Random()
         self._now = now
         self._children: list[ChildOrder] = []
@@ -112,6 +116,17 @@ class ChildOrderManager:
             if quote is None:
                 await asyncio.sleep(self._poll_interval)
                 continue
+            # Price-floor protection: if the bid is below the user-set floor,
+            # skip this placement and try again on the next tick. The bucket
+            # window will eventually elapse and the loop exits naturally if
+            # the floor stays unmet.
+            if self._min_price is not None and quote.bid < self._min_price:
+                log.info(
+                    "bucket %d: bid=%s below min_price=%s, skipping chunk",
+                    bucket.index, quote.bid, self._min_price,
+                )
+                await asyncio.sleep(self._poll_interval)
+                continue
 
             child = await self._place_passive_sell(bucket, chunk_qty, quote.bid)
             self._children.append(child)
@@ -121,6 +136,12 @@ class ChildOrderManager:
         quote = await self._md.latest_quote()
         if quote is None:
             log.info("[DRY-RUN] bucket %d: no quote, would skip", bucket.index)
+            return
+        if self._min_price is not None and quote.bid < self._min_price:
+            log.info(
+                "[DRY-RUN] bucket %d: bid=%s below min_price=%s, would skip",
+                bucket.index, quote.bid, self._min_price,
+            )
             return
         target = bucket.planned_qty
         chunk_max = max(1, int(target * self._max_visible_qty_pct / Decimal(100)))

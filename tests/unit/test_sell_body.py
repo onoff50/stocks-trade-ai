@@ -73,3 +73,23 @@ def test_sell_body_accepts_live_flag():
     # not the schema. Pydantic just normalizes the boolean.
     body = _SellBody(**_base(), dry_run=False)
     assert body.dry_run is False
+
+
+# ---------- min_price floor -------------------------------------------------
+
+
+def test_sell_body_min_price_optional():
+    body = _SellBody(**_base())
+    assert body.min_price is None
+
+
+def test_sell_body_min_price_accepts_positive():
+    body = _SellBody(**_base(), min_price=1200.5)
+    assert body.min_price == 1200.5
+
+
+def test_sell_body_min_price_rejects_zero_or_negative():
+    with pytest.raises(ValidationError):
+        _SellBody(**_base(), min_price=0)
+    with pytest.raises(ValidationError):
+        _SellBody(**_base(), min_price=-1)

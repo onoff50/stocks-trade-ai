@@ -41,6 +41,7 @@ class Engine:
         allow_no_adv_cap: bool = False,
         child_min_qty: int | None = None,
         child_max_qty: int | None = None,
+        min_price: Decimal | None = None,
     ) -> None:
         self._settings = settings
         self._broker = broker
@@ -52,6 +53,7 @@ class Engine:
         self._allow_no_adv_cap = allow_no_adv_cap
         self._child_min_qty = child_min_qty
         self._child_max_qty = child_max_qty
+        self._min_price = min_price
         self._plan: SlicePlan | None = None
         self._slippage: SlippageMonitor | None = None
         self._kill_event = asyncio.Event()
@@ -120,6 +122,7 @@ class Engine:
         mgr = ChildOrderManager(
             broker=self._broker, market_data=self._md, state=self._state, parent=self._parent,
             child_min_qty=self._child_min_qty, child_max_qty=self._child_max_qty,
+            min_price=self._min_price,
         )
         total_filled = 0
         for i, bucket in enumerate(self._plan.buckets):

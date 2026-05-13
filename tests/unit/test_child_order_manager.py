@@ -232,3 +232,52 @@ async def test_pick_chunk_qty_helper_bounds_and_fallback(state: StateStore):
     )
     assert mgr2._pick_chunk_qty(remaining=100, chunk_max=20) == 20
     assert mgr2._pick_chunk_qty(remaining=10, chunk_max=20) == 10
+
+
+# ---------- min_price floor -------------------------------------------------
+
+
+async def test_min_price_blocks_low_bid(state: StateStore):
+    """Bid 98 with floor 100 → engine should not place any child orders."""
+    p = _parent(dry_run=True)
+    await state.save_parent(p, pid=1, started_at=p.window_start)
+    md = FakeMarketData()
+    md.push_quote(_quote(bid=Decimal("98"), ask=Decimal("98.10")))
+    mgr = ChildOrderManager(
+        broker=FakeBroker(), market_data=md, state=state, parent=p,
+        min_price=Decimal("100"),
+    )
+    b = Bucket(index=0, start=p.window_start, end=p.window_start + timedelta(minutes=5), planned_qty=50)
+    await mgr.run_bucket(b)
+    assert mgr.bucket_filled_qty == 0
+    assert mgr.children == []
+
+
+async def test_min_price_allows_high_bid(state: StateStore):
+    """Bid 100 with floor 99 → engine fills normally."""
+    p = _parent(dry_run=True)
+    await state.save_parent(p, pid=1, started_at=p.window_start)
+    md = FakeMarketData()
+    md.push_quote(_quote(bid=Decimal("100"), ask=Decimal("100.10")))
+    mgr = ChildOrderManager(
+        broker=FakeBroker(), market_data=md, state=state, parent=p,
+        min_price=Decimal("99"),
+    )
+    b = Bucket(index=0, start=p.window_start, end=p.window_start + timedelta(minutes=5), planned_qty=50)
+    await mgr.run_bucket(b)
+    assert mgr.bucket_filled_qty == 50
+
+
+async def test_min_price_at_exact_threshold(state: StateStore):
+    """Bid exactly == floor is allowed (>= semantics)."""
+    p = _parent(dry_run=True)
+    await state.save_parent(p, pid=1, started_at=p.window_start)
+    md = FakeMarketData()
+    md.push_quote(_quote(bid=Decimal("100"), ask=Decimal("100.10")))
+    mgr = ChildOrderManager(
+        broker=FakeBroker(), market_data=md, state=state, parent=p,
+        min_price=Decimal("100"),
+    )
+    b = Bucket(index=0, start=p.window_start, end=p.window_start + timedelta(minutes=5), planned_qty=10)
+    await mgr.run_bucket(b)
+    assert mgr.bucket_filled_qty == 10

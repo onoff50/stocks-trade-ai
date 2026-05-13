@@ -129,30 +129,31 @@
               padding: 0 14px; border-radius: 4px; font-weight: 500;
               font-size: 12px; cursor: pointer; }
   .mode-tab:hover { background: #1c2128; color: #e6edf3; }
-  .mode-tab.active.mode-tab-dry { background: #1f6f3b; color: #fff; }
-  .mode-tab.active.mode-tab-live { background: #da3633; color: #fff; }
-  .mode-banner { padding: 8px 12px; border-radius: 4px; font-size: 11px;
-                 margin-bottom: 12px; }
-  .mode-banner-dry { background: #0d2f1c; color: #4cc26b;
-                     border: 1px solid #1f6f3b; }
-  .mode-banner-live { background: #3b0d0d; color: #ff8581;
-                      border: 1px solid #da3633; font-weight: 600;
-                      text-transform: uppercase; letter-spacing: 0.5px;
-                      animation: live-pulse 2s ease-in-out infinite; }
-  @keyframes live-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.0); }
-    50%      { box-shadow: 0 0 0 4px rgba(218, 54, 51, 0.18); }
+  /* Inverted palette per user preference: dull = dry-run (just practicing),
+     green = live (real trade — green is "go", "profit", "actually doing").
+     The dramatic visual signal is now the *presence* of color: the whole
+     page turns green when live is active. */
+  .mode-tab.active.mode-tab-dry { background: #484f58; color: #fff; }
+  .mode-tab.active.mode-tab-live { background: #1f6f3b; color: #fff; }
+  /* Short mode label that lives inline with the "New sell session" title,
+     replacing the old full-row banner. */
+  .mode-inline { font-size: 11px; font-weight: 600; margin-left: 6px;
+                 letter-spacing: 0.5px; text-transform: uppercase; }
+  .mode-inline-dry { color: #7d8590; }
+  .mode-inline-live { color: #4cc26b; }
+  /* (mode-banner styles replaced by inline label .mode-inline above.) */
+  /* Live mode: green wash on the entire form card. */
+  body.live-mode .form-card { border-color: #1f6f3b; background: #0d1a12; }
+  body.live-mode #sell_submit { background: #1f6f3b; }
+  body.live-mode #sell_submit:hover:not(:disabled) { background: #2ea043; }
+  body.live-mode #sell_submit:disabled {
+    background: #1c2a20; color: #4d6453; border: 1px solid #16291c;
   }
-  /* Live mode: alarming red overlay on the entire form card. */
-  .form-card.live-mode { border-color: #da3633; background: #1a0d0d; }
-  .form-card.live-mode #sell_submit { background: #da3633; }
-  .form-card.live-mode #sell_submit:hover:not(:disabled) { background: #f85149; }
-  .form-card.live-mode #sell_submit:disabled {
-    background: #5a1f1f; color: #7d8590; border: 1px solid #3b0d0d;
-  }
-  .live-confirm input[type=text] { border-color: #da3633; }
-  .live-confirm input[type=text]:focus { border-color: #f85149;
-    box-shadow: 0 0 0 2px rgba(218,54,51,0.25); }
+  .live-confirm input[type=text] { border-color: #1f6f3b; }
+  .live-confirm input[type=text]:focus { border-color: #2ea043;
+    box-shadow: 0 0 0 2px rgba(46,160,67,0.25); }
+  /* (Live mode keeps the page chrome neutral — only the form card and
+     session rows shift to green. Header / page background unchanged.) */
   .form-row { display: grid; grid-template-columns: 120px 1fr; align-items: center;
               gap: 10px; margin-bottom: 8px; }
   .form-row label { color: #7d8590; font-size: 11px; }
@@ -177,11 +178,11 @@
   .mode-pill { display: inline-block; padding: 1px 6px; border-radius: 3px;
                font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
                margin-left: 4px; vertical-align: middle; }
-  .mode-pill-dry { background: #1f6f3b; color: #fff; }
-  .mode-pill-live { background: #da3633; color: #fff;
-                    box-shadow: 0 0 0 1px rgba(248,81,73,0.4); }
-  tr.row-live td { background: rgba(218, 54, 51, 0.08); }
-  tr.row-live { border-left: 2px solid #da3633; }
+  .mode-pill-dry { background: #484f58; color: #c9d1d9; }
+  .mode-pill-live { background: #1f6f3b; color: #fff;
+                    box-shadow: 0 0 0 1px rgba(46,160,67,0.4); }
+  tr.row-live td { background: rgba(31, 111, 59, 0.10); }
+  tr.row-live { border-left: 2px solid #2ea043; }
   .session-actions button { background: #21262d; color: #e6edf3; border: 1px solid #30363d;
                             border-radius: 3px; padding: 0 8px; height: 22px;
                             font-size: 11px; margin-left: 4px; font-weight: 400; }
@@ -227,18 +228,16 @@
 {% if sessions_enabled %}
 <div class="top-grid">
   <section class="form-card" id="sell_form_card">
-    <div class="form-title">New sell session</div>
+    <div class="form-title">
+      New sell session
+      <span class="mode-inline mode-inline-dry" id="mode_inline_dry">— dry-run</span>
+      <span class="mode-inline mode-inline-live" id="mode_inline_live" hidden>— LIVE</span>
+    </div>
     <div class="mode-toggle" role="tablist">
       <button type="button" class="mode-tab mode-tab-dry active" data-mode="dry"
               id="mode_dry">Dry-run</button>
       <button type="button" class="mode-tab mode-tab-live" data-mode="live"
               id="mode_live">Live trade</button>
-    </div>
-    <div class="mode-banner mode-banner-dry" id="banner_dry">
-      Safe simulation — no real orders placed.
-    </div>
-    <div class="mode-banner mode-banner-live" id="banner_live" hidden>
-      ⚠ LIVE TRADE — REAL MONEY — orders WILL hit the broker.
     </div>
     <form id="sell_form">
       <div class="form-row">
@@ -248,6 +247,11 @@
       <div class="form-row">
         <label for="sell_qty">Quantity</label>
         <input id="sell_qty" type="number" min="1" step="1" placeholder="e.g. 100">
+      </div>
+      <div class="form-row">
+        <label for="sell_min_price">Min price (₹)</label>
+        <input id="sell_min_price" type="number" min="0" step="0.01"
+               placeholder="optional — skip sells below this">
       </div>
       <div class="form-row">
         <label for="sell_until">End time (IST)</label>
@@ -767,6 +771,8 @@
     const cmax = parseInt($('sell_child_max').value, 10);
     if (!Number.isNaN(cmin)) body.child_min_qty = cmin;
     if (!Number.isNaN(cmax)) body.child_max_qty = cmax;
+    const mp = parseFloat($('sell_min_price').value);
+    if (!Number.isNaN(mp) && mp > 0) body.min_price = mp;
     $('sell_submit').disabled = true;
     $('sell_msg').textContent = 'starting…';
     $('sell_msg').className = 'submit-msg';
@@ -802,21 +808,20 @@
 
   function setMode(mode) {
     currentMode = mode;
-    const card = $('sell_form_card');
     if (mode === 'live') {
-      card.classList.add('live-mode');
+      document.body.classList.add('live-mode');
       $('mode_dry').classList.remove('active');
       $('mode_live').classList.add('active');
-      $('banner_dry').hidden = true;
-      $('banner_live').hidden = false;
+      $('mode_inline_dry').hidden = true;
+      $('mode_inline_live').hidden = false;
       $('live_confirm').hidden = false;
       $('sell_submit').textContent = 'Place LIVE sell session';
     } else {
-      card.classList.remove('live-mode');
+      document.body.classList.remove('live-mode');
       $('mode_live').classList.remove('active');
       $('mode_dry').classList.add('active');
-      $('banner_live').hidden = true;
-      $('banner_dry').hidden = false;
+      $('mode_inline_live').hidden = true;
+      $('mode_inline_dry').hidden = false;
       $('live_confirm').hidden = true;
       $('sell_submit').textContent = 'Start dry-run sell';
       // Reset live-confirm fields so they can't carry stale state.
