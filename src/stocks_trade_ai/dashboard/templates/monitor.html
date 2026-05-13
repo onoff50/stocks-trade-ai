@@ -120,7 +120,39 @@
   .err-pill { color: #f85149; font-size: 11px; min-width: 120px; }
   /* Sell form */
   .form-card { background: #161b22; border: 1px solid #30363d; padding: 16px;
-               border-radius: 6px; }
+               border-radius: 6px; transition: border-color 0.15s, background 0.15s; }
+  /* Mode toggle: segmented Dry-run / Live tabs at top of form */
+  .mode-toggle { display: inline-flex; background: #0d1117;
+                 border: 1px solid #30363d; border-radius: 6px;
+                 padding: 2px; margin-bottom: 10px; }
+  .mode-tab { background: transparent; color: #7d8590; height: 26px;
+              padding: 0 14px; border-radius: 4px; font-weight: 500;
+              font-size: 12px; cursor: pointer; }
+  .mode-tab:hover { background: #1c2128; color: #e6edf3; }
+  .mode-tab.active.mode-tab-dry { background: #1f6f3b; color: #fff; }
+  .mode-tab.active.mode-tab-live { background: #da3633; color: #fff; }
+  .mode-banner { padding: 8px 12px; border-radius: 4px; font-size: 11px;
+                 margin-bottom: 12px; }
+  .mode-banner-dry { background: #0d2f1c; color: #4cc26b;
+                     border: 1px solid #1f6f3b; }
+  .mode-banner-live { background: #3b0d0d; color: #ff8581;
+                      border: 1px solid #da3633; font-weight: 600;
+                      text-transform: uppercase; letter-spacing: 0.5px;
+                      animation: live-pulse 2s ease-in-out infinite; }
+  @keyframes live-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(218, 54, 51, 0.0); }
+    50%      { box-shadow: 0 0 0 4px rgba(218, 54, 51, 0.18); }
+  }
+  /* Live mode: alarming red overlay on the entire form card. */
+  .form-card.live-mode { border-color: #da3633; background: #1a0d0d; }
+  .form-card.live-mode #sell_submit { background: #da3633; }
+  .form-card.live-mode #sell_submit:hover:not(:disabled) { background: #f85149; }
+  .form-card.live-mode #sell_submit:disabled {
+    background: #5a1f1f; color: #7d8590; border: 1px solid #3b0d0d;
+  }
+  .live-confirm input[type=text] { border-color: #da3633; }
+  .live-confirm input[type=text]:focus { border-color: #f85149;
+    box-shadow: 0 0 0 2px rgba(218,54,51,0.25); }
   .form-row { display: grid; grid-template-columns: 120px 1fr; align-items: center;
               gap: 10px; margin-bottom: 8px; }
   .form-row label { color: #7d8590; font-size: 11px; }
@@ -141,6 +173,15 @@
   .session-status.running { background: #1f6f3b; color: #fff; }
   .session-status.completed { background: #30363d; color: #c9d1d9; }
   .session-status.error { background: #5a1f1f; color: #fff; }
+  /* Mode pill on each session row + in the detail panel. */
+  .mode-pill { display: inline-block; padding: 1px 6px; border-radius: 3px;
+               font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+               margin-left: 4px; vertical-align: middle; }
+  .mode-pill-dry { background: #1f6f3b; color: #fff; }
+  .mode-pill-live { background: #da3633; color: #fff;
+                    box-shadow: 0 0 0 1px rgba(248,81,73,0.4); }
+  tr.row-live td { background: rgba(218, 54, 51, 0.08); }
+  tr.row-live { border-left: 2px solid #da3633; }
   .session-actions button { background: #21262d; color: #e6edf3; border: 1px solid #30363d;
                             border-radius: 3px; padding: 0 8px; height: 22px;
                             font-size: 11px; margin-left: 4px; font-weight: 400; }
@@ -185,9 +226,19 @@
 
 {% if sessions_enabled %}
 <div class="top-grid">
-  <section class="form-card">
-    <div class="form-title">New sell session
-      <span class="normal">— dry-run only, no real orders placed</span>
+  <section class="form-card" id="sell_form_card">
+    <div class="form-title">New sell session</div>
+    <div class="mode-toggle" role="tablist">
+      <button type="button" class="mode-tab mode-tab-dry active" data-mode="dry"
+              id="mode_dry">Dry-run</button>
+      <button type="button" class="mode-tab mode-tab-live" data-mode="live"
+              id="mode_live">Live trade</button>
+    </div>
+    <div class="mode-banner mode-banner-dry" id="banner_dry">
+      Safe simulation — no real orders placed.
+    </div>
+    <div class="mode-banner mode-banner-live" id="banner_live" hidden>
+      ⚠ LIVE TRADE — REAL MONEY — orders WILL hit the broker.
     </div>
     <form id="sell_form">
       <div class="form-row">
@@ -238,6 +289,21 @@
           preserved.
         </div>
       </details>
+      <div class="live-confirm" id="live_confirm" hidden>
+        <div class="form-row" style="margin-top: 10px;">
+          <label for="live_confirm_sym">Type symbol to confirm</label>
+          <input id="live_confirm_sym" type="text" maxlength="20"
+                 placeholder="e.g. RELIANCE" autocomplete="off">
+        </div>
+        <div class="form-row">
+          <label for="live_confirm_check">I understand</label>
+          <input id="live_confirm_check" type="checkbox" class="check">
+        </div>
+        <div class="muted" style="font-size: 11px;">
+          Real orders will be placed on Groww using your linked account.
+          Submit is disabled until both fields match.
+        </div>
+      </div>
       <div class="submit-row">
         <button id="sell_submit" type="submit">Start dry-run sell</button>
         <span id="sell_msg" class="submit-msg">&nbsp;</span>
@@ -610,8 +676,12 @@
       const status = s.status || 'running';
       const killBtn = status === 'running'
         ? `<button class="danger" data-kill="${s.session_id}">Kill</button>` : '';
-      return `<tr>
-        <td><code>${idShort}</code></td>
+      const modePill = s.dry_run
+        ? '<span class="mode-pill mode-pill-dry">DRY</span>'
+        : '<span class="mode-pill mode-pill-live">LIVE</span>';
+      const rowClass = s.dry_run ? '' : ' class="row-live"';
+      return `<tr${rowClass}>
+        <td><code>${idShort}</code> ${modePill}</td>
         <td>${s.symbol}</td>
         <td>${s.filled_qty} / ${s.total_qty}
           <span class="sess-bar"><div style="width:${pct}%"></div></span>
@@ -631,7 +701,9 @@
       if (s) {
         $('session_detail_container').innerHTML = `<div class="session-detail">
           <div><strong>${s.session_id}</strong> · ${s.symbol} · ${s.exchange || ''} · ${s.product || ''}
-          ${s.dry_run ? '<span class="pill" style="background:#5a4a1f">DRY-RUN</span>' : ''}</div>
+          ${s.dry_run
+            ? '<span class="mode-pill mode-pill-dry">DRY-RUN</span>'
+            : '<span class="mode-pill mode-pill-live">LIVE</span>'}</div>
           <div class="muted" style="margin: 4px 0">
             window ${new Date(s.window_start).toLocaleTimeString()} → ${new Date(s.window_end).toLocaleTimeString()}
             · arrival_mid ${s.arrival_mid || '—'}
@@ -681,6 +753,7 @@
 
   $('sell_form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const isLive = currentMode === 'live';
     const body = {
       symbol: $('sell_symbol').value.trim().toUpperCase(),
       qty: parseInt($('sell_qty').value, 10),
@@ -688,6 +761,7 @@
       start: $('sell_start').value.trim() || null,
       product: $('sell_product').value,
       allow_no_adv_cap: $('sell_no_adv').checked,
+      dry_run: !isLive,
     };
     const cmin = parseInt($('sell_child_min').value, 10);
     const cmax = parseInt($('sell_child_max').value, 10);
@@ -717,8 +791,61 @@
       $('sell_msg').className = 'submit-msg err';
     } finally {
       $('sell_submit').disabled = false;
+      // After every submit, re-evaluate the live gating because the disabled
+      // state may need to be reapplied for live mode.
+      updateLiveGate();
     }
   });
+
+  // ---------- live / dry-run mode toggle ----------
+  let currentMode = 'dry';
+
+  function setMode(mode) {
+    currentMode = mode;
+    const card = $('sell_form_card');
+    if (mode === 'live') {
+      card.classList.add('live-mode');
+      $('mode_dry').classList.remove('active');
+      $('mode_live').classList.add('active');
+      $('banner_dry').hidden = true;
+      $('banner_live').hidden = false;
+      $('live_confirm').hidden = false;
+      $('sell_submit').textContent = 'Place LIVE sell session';
+    } else {
+      card.classList.remove('live-mode');
+      $('mode_live').classList.remove('active');
+      $('mode_dry').classList.add('active');
+      $('banner_live').hidden = true;
+      $('banner_dry').hidden = false;
+      $('live_confirm').hidden = true;
+      $('sell_submit').textContent = 'Start dry-run sell';
+      // Reset live-confirm fields so they can't carry stale state.
+      $('live_confirm_sym').value = '';
+      $('live_confirm_check').checked = false;
+    }
+    updateLiveGate();
+  }
+
+  function updateLiveGate() {
+    // In dry-run mode the submit is always enabled. In live mode, the user
+    // must (a) type the exact symbol in the confirm box AND (b) tick the
+    // "I understand" checkbox. Both belt and suspenders.
+    if (currentMode !== 'live') {
+      $('sell_submit').disabled = false;
+      return;
+    }
+    const target = ($('sell_symbol').value || '').trim().toUpperCase();
+    const typed = ($('live_confirm_sym').value || '').trim().toUpperCase();
+    const checked = $('live_confirm_check').checked;
+    $('sell_submit').disabled = !(target && typed === target && checked);
+  }
+
+  $('mode_dry').addEventListener('click', () => setMode('dry'));
+  $('mode_live').addEventListener('click', () => setMode('live'));
+  ['sell_symbol', 'live_confirm_sym'].forEach(id =>
+    $(id).addEventListener('input', updateLiveGate)
+  );
+  $('live_confirm_check').addEventListener('change', updateLiveGate);
 
   refreshSessions();
   setInterval(refreshSessions, 2000);

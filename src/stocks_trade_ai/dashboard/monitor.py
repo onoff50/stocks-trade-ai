@@ -355,6 +355,9 @@ class _SellBody(BaseModel):
     allow_no_adv_cap: bool = True
     child_min_qty: int | None = Field(default=None, gt=0, le=10_000_000)
     child_max_qty: int | None = Field(default=None, gt=0, le=10_000_000)
+    # dry_run defaults to True. Live trades require dry_run=False AND the
+    # ALLOW_LIVE_TRADES env var set; the route handler enforces the env gate.
+    dry_run: bool = True
 
     @field_validator("symbol")
     @classmethod
@@ -610,6 +613,18 @@ def create_monitor_app(
     async def create_session(body: _SellBody) -> Any:
         if registry is None:
             raise HTTPException(status_code=503, detail="sessions disabled")
+        # Server-side live-trade gate: even if a client sends dry_run=False,
+        # the server only honors it when the operator explicitly enabled live
+        # trading by starting the process with ALLOW_LIVE_TRADES=1. This
+        # protects against a fat-fingered client.
+        if not body.dry_run and os.environ.get("ALLOW_LIVE_TRADES") != "1":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "live trading disabled on this server",
+                    "hint": "restart with ALLOW_LIVE_TRADES=1 to enable",
+                },
+            )
         try:
             start_dt = _parse_hhmm_today(body.start) if body.start else datetime.now(tz=IST)
             end_dt = _parse_hhmm_today(body.until)
@@ -625,7 +640,15 @@ def create_monitor_app(
                 allow_no_adv_cap=body.allow_no_adv_cap,
                 child_min_qty=body.child_min_qty,
                 child_max_qty=body.child_max_qty,
+                dry_run=body.dry_run,
             )
+            if not body.dry_run:
+                log.warning(
+                    "*** LIVE SESSION REQUESTED *** symbol=%s qty=%d window=%s..%s",
+                    body.symbol, body.qty,
+                    start_dt.isoformat(timespec="seconds"),
+                    end_dt.isoformat(timespec="seconds"),
+                )
             sess = await registry.start(req)
         except KeyError as exc:
             raise HTTPException(
@@ -634,7 +657,7 @@ def create_monitor_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail={"error": str(exc)})
-        return {"session_id": sess.session_id}
+        return {"session_id": sess.session_id, "dry_run": body.dry_run}
 
     @app.post("/api/sessions/{session_id}/kill", dependencies=[Depends(require_auth)])
     async def kill_session(session_id: str) -> Any:

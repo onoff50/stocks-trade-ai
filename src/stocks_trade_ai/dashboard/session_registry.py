@@ -59,6 +59,10 @@ class SellRequest:
     allow_no_adv_cap: bool = True
     child_min_qty: int | None = None
     child_max_qty: int | None = None
+    # When dry_run is False the engine routes through the real GrowwBroker.
+    # The route handler must already have enforced the ALLOW_LIVE_TRADES env
+    # gate before constructing a SellRequest with dry_run=False.
+    dry_run: bool = True
 
 
 class SessionRegistry:
@@ -130,7 +134,7 @@ class SessionRegistry:
                 total_qty=req.qty,
                 window_start=req.window_start,
                 window_end=req.window_end,
-                dry_run=True,  # always dry-run from the UI for now
+                dry_run=req.dry_run,
                 arrival_mid=None,
             )
 
@@ -162,9 +166,10 @@ class SessionRegistry:
                 started_at=datetime.now(tz=IST),
             )
             self._sessions[parent.session_id] = running
-            log.info(
-                "Started dry-run session %s: %s qty=%d window=%s..%s",
-                parent.session_id, parent.symbol, parent.total_qty,
+            mode = "DRY-RUN" if parent.dry_run else "*** LIVE ***"
+            log.warning(
+                "Started %s session %s: %s qty=%d window=%s..%s",
+                mode, parent.session_id, parent.symbol, parent.total_qty,
                 parent.window_start.isoformat(timespec="seconds"),
                 parent.window_end.isoformat(timespec="seconds"),
             )

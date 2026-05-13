@@ -53,3 +53,23 @@ def test_sell_body_rejects_negative_or_zero_min():
         _SellBody(**_base(), child_min_qty=0, child_max_qty=10)
     with pytest.raises(ValidationError):
         _SellBody(**_base(), child_min_qty=-1, child_max_qty=10)
+
+
+# ---------- dry_run / live mode ---------------------------------------------
+
+
+def test_sell_body_dry_run_defaults_to_true():
+    body = _SellBody(**_base())
+    assert body.dry_run is True
+
+
+def test_sell_body_accepts_explicit_dry_run():
+    body = _SellBody(**_base(), dry_run=True)
+    assert body.dry_run is True
+
+
+def test_sell_body_accepts_live_flag():
+    # Schema-level acceptance — the live env-gate is enforced in the route,
+    # not the schema. Pydantic just normalizes the boolean.
+    body = _SellBody(**_base(), dry_run=False)
+    assert body.dry_run is False
