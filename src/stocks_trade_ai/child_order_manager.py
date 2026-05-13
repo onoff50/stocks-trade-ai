@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -47,6 +48,9 @@ class ChildOrderManager:
         max_cross_bps: Decimal = DEFAULT_MAX_CROSS_BPS,
         max_visible_qty_pct: Decimal = DEFAULT_MAX_VISIBLE_QTY_PCT,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
+        child_min_qty: int | None = None,
+        child_max_qty: int | None = None,
+        rng: random.Random | None = None,
         now: callable = lambda: datetime.now(tz=IST),
     ) -> None:
         self._broker = broker
@@ -56,8 +60,27 @@ class ChildOrderManager:
         self._max_cross_bps = max_cross_bps
         self._max_visible_qty_pct = max_visible_qty_pct
         self._poll_interval = poll_interval
+        self._child_min = child_min_qty
+        self._child_max = child_max_qty
+        self._rng = rng or random.Random()
         self._now = now
         self._children: list[ChildOrder] = []
+
+    def _pick_chunk_qty(self, remaining: int, chunk_max: int) -> int:
+        """Pick the size for the next child order.
+
+        - With [min, max] set: random in [min, min(max, remaining)], or just
+          `remaining` when the bucket residual is below `min` (no further
+          splitting possible — emit the tail).
+        - Without bounds: the historical 20%-of-bucket behavior, clamped by
+          the bucket's remaining qty.
+        """
+        if self._child_min is not None and self._child_max is not None:
+            upper = min(self._child_max, remaining)
+            if upper < self._child_min:
+                return remaining
+            return self._rng.randint(self._child_min, upper)
+        return min(chunk_max, remaining)
 
     @property
     def children(self) -> list[ChildOrder]:
@@ -84,7 +107,7 @@ class ChildOrderManager:
 
         while self.bucket_filled_qty < target and self._now() < bucket.end:
             remaining = target - self.bucket_filled_qty
-            chunk_qty = min(chunk_max, remaining)
+            chunk_qty = self._pick_chunk_qty(remaining, chunk_max)
             quote = await self._md.latest_quote()
             if quote is None:
                 await asyncio.sleep(self._poll_interval)
@@ -99,20 +122,40 @@ class ChildOrderManager:
         if quote is None:
             log.info("[DRY-RUN] bucket %d: no quote, would skip", bucket.index)
             return
+        target = bucket.planned_qty
+        chunk_max = max(1, int(target * self._max_visible_qty_pct / Decimal(100)))
         log.info(
-            "[DRY-RUN] bucket %d: would sell %d @ bid %s (escalate to mid then cross by %s bps)",
-            bucket.index, bucket.planned_qty, quote.bid, self._max_cross_bps,
+            "[DRY-RUN] bucket %d: would sell %d @ bid %s "
+            "(escalate to mid then cross by %s bps, child range=%s)",
+            bucket.index, target, quote.bid, self._max_cross_bps,
+            self._child_range_label(),
         )
-        synthetic = ChildOrder(
-            local_id=f"dry-{uuid.uuid4().hex[:8]}",
-            bucket_index=bucket.index, side=Side.SELL,
-            qty=bucket.planned_qty, price=quote.bid, order_type="LIMIT",
-            status=OrderStatus.FILLED, placed_at=self._now(), last_status_at=self._now(),
-        )
-        synthetic.fills.append(Fill(qty=bucket.planned_qty, price=quote.bid, timestamp=self._now()))
-        self._children.append(synthetic)
-        await self._state.upsert_child(self._parent.session_id, synthetic)
-        await self._state.append_fill(synthetic.local_id, synthetic.fills[0])
+        # Synthesize one filled child per chunk so the UI can show the
+        # random-size jitter, not just a single all-in-one order.
+        bucket_filled = 0
+        while bucket_filled < target:
+            remaining = target - bucket_filled
+            chunk_qty = self._pick_chunk_qty(remaining, chunk_max)
+            chunk_qty = max(1, min(chunk_qty, remaining))
+            synthetic = ChildOrder(
+                local_id=f"dry-{uuid.uuid4().hex[:8]}",
+                bucket_index=bucket.index, side=Side.SELL,
+                qty=chunk_qty, price=quote.bid, order_type="LIMIT",
+                status=OrderStatus.FILLED,
+                placed_at=self._now(), last_status_at=self._now(),
+            )
+            synthetic.fills.append(
+                Fill(qty=chunk_qty, price=quote.bid, timestamp=self._now()),
+            )
+            self._children.append(synthetic)
+            await self._state.upsert_child(self._parent.session_id, synthetic)
+            await self._state.append_fill(synthetic.local_id, synthetic.fills[0])
+            bucket_filled += chunk_qty
+
+    def _child_range_label(self) -> str:
+        if self._child_min is not None and self._child_max is not None:
+            return f"[{self._child_min},{self._child_max}]"
+        return f"~20%-of-bucket"
 
     async def _place_passive_sell(self, bucket: Bucket, qty: int, price: Decimal) -> ChildOrder:
         child = ChildOrder(

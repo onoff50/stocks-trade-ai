@@ -219,9 +219,23 @@
           <label for="sell_no_adv">Allow no ADV cap</label>
           <input id="sell_no_adv" class="check" type="checkbox" checked>
         </div>
-        <div class="muted" style="font-size: 11px;">
+        <div class="muted" style="font-size: 11px; margin-bottom: 8px;">
           Skips the 20-day ADV cap when historical-data API scope is unavailable.
-          Required today; uncheck once your API key has the upgraded tier.
+        </div>
+        <div class="form-row">
+          <label for="sell_child_min">Child size min</label>
+          <input id="sell_child_min" type="number" min="1" step="1"
+                 placeholder="blank = 20% of bucket">
+        </div>
+        <div class="form-row">
+          <label for="sell_child_max">Child size max</label>
+          <input id="sell_child_max" type="number" min="1" step="1"
+                 placeholder="blank = 20% of bucket">
+        </div>
+        <div class="muted" style="font-size: 11px;">
+          Optional. When set, each child order's qty is random in [min, max],
+          capped by the bucket's remaining planned qty so VWAP timing is
+          preserved.
         </div>
       </details>
       <div class="submit-row">
@@ -675,6 +689,10 @@
       product: $('sell_product').value,
       allow_no_adv_cap: $('sell_no_adv').checked,
     };
+    const cmin = parseInt($('sell_child_min').value, 10);
+    const cmax = parseInt($('sell_child_max').value, 10);
+    if (!Number.isNaN(cmin)) body.child_min_qty = cmin;
+    if (!Number.isNaN(cmax)) body.child_max_qty = cmax;
     $('sell_submit').disabled = true;
     $('sell_msg').textContent = 'starting…';
     $('sell_msg').className = 'submit-msg';

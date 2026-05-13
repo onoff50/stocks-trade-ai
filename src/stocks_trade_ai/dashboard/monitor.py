@@ -25,7 +25,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..config import IST
 from ..market_data import (
@@ -353,6 +353,8 @@ class _SellBody(BaseModel):
     start: str | None = Field(default=None, description="HH:MM IST, defaults to now")
     product: str = Field(default="CNC")
     allow_no_adv_cap: bool = True
+    child_min_qty: int | None = Field(default=None, gt=0, le=10_000_000)
+    child_max_qty: int | None = Field(default=None, gt=0, le=10_000_000)
 
     @field_validator("symbol")
     @classmethod
@@ -366,6 +368,21 @@ class _SellBody(BaseModel):
         if v not in {"CNC", "MIS"}:
             raise ValueError("product must be CNC or MIS")
         return v
+
+    @model_validator(mode="after")
+    def _child_bounds_consistent(self) -> "_SellBody":
+        # Both set or both unset; max >= min when set.
+        if (self.child_min_qty is None) != (self.child_max_qty is None):
+            raise ValueError(
+                "child_min_qty and child_max_qty must both be set or both blank",
+            )
+        if (
+            self.child_min_qty is not None
+            and self.child_max_qty is not None
+            and self.child_max_qty < self.child_min_qty
+        ):
+            raise ValueError("child_max_qty must be >= child_min_qty")
+        return self
 
 
 def _parse_hhmm_today(hhmm: str) -> datetime:
@@ -606,6 +623,8 @@ def create_monitor_app(
                 window_start=start_dt, window_end=end_dt,
                 product=body.product,
                 allow_no_adv_cap=body.allow_no_adv_cap,
+                child_min_qty=body.child_min_qty,
+                child_max_qty=body.child_max_qty,
             )
             sess = await registry.start(req)
         except KeyError as exc:

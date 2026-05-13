@@ -39,6 +39,8 @@ class Engine:
         state: StateStore, parent: ParentOrder,
         adv_20day: float, volume_profile: dict[Any, float],
         allow_no_adv_cap: bool = False,
+        child_min_qty: int | None = None,
+        child_max_qty: int | None = None,
     ) -> None:
         self._settings = settings
         self._broker = broker
@@ -48,6 +50,8 @@ class Engine:
         self._adv_20day = adv_20day
         self._profile = volume_profile
         self._allow_no_adv_cap = allow_no_adv_cap
+        self._child_min_qty = child_min_qty
+        self._child_max_qty = child_max_qty
         self._plan: SlicePlan | None = None
         self._slippage: SlippageMonitor | None = None
         self._kill_event = asyncio.Event()
@@ -115,6 +119,7 @@ class Engine:
         assert self._plan is not None
         mgr = ChildOrderManager(
             broker=self._broker, market_data=self._md, state=self._state, parent=self._parent,
+            child_min_qty=self._child_min_qty, child_max_qty=self._child_max_qty,
         )
         total_filled = 0
         for i, bucket in enumerate(self._plan.buckets):

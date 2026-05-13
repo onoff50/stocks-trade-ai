@@ -137,3 +137,98 @@ async def test_unfilled_chunk_cancelled_at_bucket_end(state: StateStore):
 
     assert place_count == 1  # only one chunk placed before bucket expired
     assert mgr.children[0].status == OrderStatus.CANCELLED
+
+
+# ---------- random child-size jitter ---------------------------------------
+
+import random
+
+
+async def test_child_chunks_random_within_bounds(state: StateStore):
+    """With child_min=5 / child_max=15, every emitted child is in [5, 15]
+    (or the tail residual when bucket remaining is below min), and they sum
+    to the bucket planned qty."""
+    p = _parent(dry_run=True)
+    await state.save_parent(p, pid=1, started_at=p.window_start)
+    md = FakeMarketData()
+    md.push_quote(_quote())
+    rng = random.Random(42)
+    mgr = ChildOrderManager(
+        broker=FakeBroker(), market_data=md, state=state, parent=p,
+        child_min_qty=5, child_max_qty=15, rng=rng,
+    )
+    b = Bucket(index=0, start=p.window_start, end=p.window_start + timedelta(minutes=5), planned_qty=100)
+    await mgr.run_bucket(b)
+    assert mgr.bucket_filled_qty == 100
+    chunks = [c.qty for c in mgr.children]
+    assert sum(chunks) == 100
+    # All but possibly the last must respect [5,15]. The last can be a residual
+    # tail if remaining < 5.
+    for q in chunks[:-1]:
+        assert 5 <= q <= 15, f"chunk {q} outside [5,15]"
+    # Last chunk: in-range OR a tail residual (< min).
+    assert chunks[-1] >= 1
+    assert chunks[-1] <= 15
+    # >1 chunk produced (otherwise the jitter test doesn't really exercise the loop).
+    assert len(chunks) > 1
+
+
+async def test_child_residual_falls_below_min(state: StateStore):
+    """Bucket of 20 with min=15/max=18 — first chunk in [15,18], then the
+    residual (< min) is emitted as a single tail chunk."""
+    p = _parent(dry_run=True)
+    await state.save_parent(p, pid=1, started_at=p.window_start)
+    md = FakeMarketData()
+    md.push_quote(_quote())
+    rng = random.Random(0)
+    mgr = ChildOrderManager(
+        broker=FakeBroker(), market_data=md, state=state, parent=p,
+        child_min_qty=15, child_max_qty=18, rng=rng,
+    )
+    b = Bucket(index=0, start=p.window_start, end=p.window_start + timedelta(minutes=5), planned_qty=20)
+    await mgr.run_bucket(b)
+    chunks = [c.qty for c in mgr.children]
+    assert sum(chunks) == 20
+    assert 15 <= chunks[0] <= 18
+    # The remainder is below `min` → emitted as a tail residual.
+    assert chunks[-1] == 20 - chunks[0]
+
+
+async def test_no_bounds_falls_back_to_20pct(state: StateStore):
+    """With child_min/max=None, behavior matches the pre-jitter design:
+    every chunk (except possibly the last) is 20% of bucket qty."""
+    p = _parent(dry_run=True)
+    await state.save_parent(p, pid=1, started_at=p.window_start)
+    md = FakeMarketData()
+    md.push_quote(_quote())
+    mgr = ChildOrderManager(
+        broker=FakeBroker(), market_data=md, state=state, parent=p,
+    )
+    b = Bucket(index=0, start=p.window_start, end=p.window_start + timedelta(minutes=5), planned_qty=100)
+    await mgr.run_bucket(b)
+    chunks = [c.qty for c in mgr.children]
+    assert sum(chunks) == 100
+    # 20% of 100 = 20, expect 5 chunks of 20.
+    assert chunks == [20, 20, 20, 20, 20]
+
+
+async def test_pick_chunk_qty_helper_bounds_and_fallback(state: StateStore):
+    """Direct unit test of _pick_chunk_qty for the three code paths."""
+    p = _parent(dry_run=True)
+    mgr = ChildOrderManager(
+        broker=FakeBroker(), market_data=FakeMarketData(), state=state, parent=p,
+        child_min_qty=5, child_max_qty=10, rng=random.Random(1),
+    )
+    # In-range pick.
+    q = mgr._pick_chunk_qty(remaining=100, chunk_max=20)
+    assert 5 <= q <= 10
+    # Remaining below min → residual.
+    assert mgr._pick_chunk_qty(remaining=3, chunk_max=20) == 3
+    # Remaining == min → exactly min.
+    assert mgr._pick_chunk_qty(remaining=5, chunk_max=20) == 5
+    # Without bounds → fallback to chunk_max.
+    mgr2 = ChildOrderManager(
+        broker=FakeBroker(), market_data=FakeMarketData(), state=state, parent=p,
+    )
+    assert mgr2._pick_chunk_qty(remaining=100, chunk_max=20) == 20
+    assert mgr2._pick_chunk_qty(remaining=10, chunk_max=20) == 10

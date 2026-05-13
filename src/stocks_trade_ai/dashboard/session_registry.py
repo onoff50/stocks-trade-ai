@@ -57,6 +57,8 @@ class SellRequest:
     segment: str = "CASH"
     product: str = "CNC"
     allow_no_adv_cap: bool = True
+    child_min_qty: int | None = None
+    child_max_qty: int | None = None
 
 
 class SessionRegistry:
@@ -146,6 +148,8 @@ class SessionRegistry:
                 settings=self._settings, broker=broker, market_data=md, state=state,
                 parent=parent, adv_20day=adv, volume_profile=profile,
                 allow_no_adv_cap=req.allow_no_adv_cap,
+                child_min_qty=req.child_min_qty,
+                child_max_qty=req.child_max_qty,
             )
 
             running = RunningSession(
