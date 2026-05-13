@@ -200,19 +200,29 @@ async def _fetch_history(api, parent: ParentOrder):
     daily: dict[date, int] = {}
     for row in raw:
         if isinstance(row, dict):
-            ts = datetime.fromisoformat(str(row["timestamp"])).astimezone(IST)
-            o = Decimal(str(row["open"]))
-            h = Decimal(str(row["high"]))
-            lo = Decimal(str(row["low"]))
-            c = Decimal(str(row["close"]))
-            v = int(row["volume"])
-        else:  # list-of-lists: [ts, o, h, l, c, v]
-            ts = datetime.fromtimestamp(int(row[0]), tz=IST)
-            o = Decimal(str(row[1]))
-            h = Decimal(str(row[2]))
-            lo = Decimal(str(row[3]))
-            c = Decimal(str(row[4]))
-            v = int(row[5])
+            ts_raw = row["timestamp"]
+            o_raw, h_raw, lo_raw, c_raw = (
+                row["open"], row["high"], row["low"], row["close"],
+            )
+            v_raw = row["volume"]
+        else:  # list-of-lists: [ts, o, h, l, c, v, ...]
+            ts_raw, o_raw, h_raw, lo_raw, c_raw, v_raw = row[0:6]
+        # Skip rows with no actual trades (Groww returns pre/post-session bars
+        # with None OHLC but a stub volume — these aren't real candles).
+        if o_raw is None or h_raw is None or lo_raw is None or c_raw is None:
+            continue
+        # Timestamp is either an ISO-8601 string ("2026-04-23T09:00:00") or
+        # an epoch integer; accept both.
+        if isinstance(ts_raw, (int, float)):
+            ts = datetime.fromtimestamp(int(ts_raw), tz=IST)
+        else:
+            ts = datetime.fromisoformat(str(ts_raw))
+            ts = ts.astimezone(IST) if ts.tzinfo else ts.replace(tzinfo=IST)
+        o = Decimal(str(o_raw))
+        h = Decimal(str(h_raw))
+        lo = Decimal(str(lo_raw))
+        c = Decimal(str(c_raw))
+        v = int(v_raw or 0)
         bars.append(OHLCBar(start=ts, open=o, high=h, low=lo, close=c, volume=v))
         daily[ts.date()] = daily.get(ts.date(), 0) + v
     adv = (sum(daily.values()) / len(daily)) if daily else 0.0
